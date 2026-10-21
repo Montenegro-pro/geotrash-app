@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GeoTrash - Gestión y Tracking de Camiones de Basura</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                            900: '#14532d',
+                        },
+                        truck: {
+                            yellow: '#f59e0b',
+                            dark: '#0f172a',
+                            panel: '#1e293b'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Ajustes específicos para mapas en móviles */
+        #map {
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        .leaflet-container {
+            font-family: inherit;
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(100,100,100,0.3);
+            border-radius: 4px;
+        }
+        /* Animación para pulso de grabación GPS */
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(1.15); }
+        }
+        .animate-pulse-red {
+            animation: pulse-red 1.5s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 h-full flex flex-col font-sans overflow-x-hidden select-none">
+
+    <!-- Encabezado Superior -->
+    <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex justify-between items-center z-20 shrink-0 shadow-md">
+        <div class="flex items-center gap-3">
+            <div class="bg-brand-600 p-2 rounded-xl shadow-lg shadow-brand-600/30">
+                <i data-lucide="truck" class="w-6 h-6 text-white"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold leading-none tracking-wide text-white flex items-center gap-2">
+                    GeoTrash <span class="text-xs bg-brand-500/20 text-brand-400 border border-brand-500/30 px-2 py-0.5 rounded-full font-semibold">ECO-OPS</span>
+                </h1>
+                <p class="text-xs text-slate-400 mt-0.5">Gestión de Rutas & Recolección</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <!-- Indicador de Estado de Ruta -->
+            <div id="statusBadge" class="flex items-center gap-2 bg-slate-700/60 border border-slate-600/50 px-3 py-1.5 rounded-full text-xs font-medium text-slate-300">
+                <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+                <span id="statusText">Listo</span>
+            </div>
+            
+            <!-- Botón Modo Demo -->
+            <button id="toggleDemoBtn" onclick="toggleDemoMode()" class="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition font-medium">
+                <i data-lucide="play-circle" class="w-4 h-4"></i>
+                <span class="hidden sm:inline">Modo</span> Simulación
+            </button>
+        </div>
+    </header>
+
+    <!-- Contenedor Principal (Panel Dividido) -->
+    <div class="flex-1 flex flex-col lg:flex-row relative overflow-hidden">
+        
+        <!-- Sección del Mapa -->
+        <div class="relative flex-1 h-[55vh] lg:h-auto min-h-[300px]">
+            <div id="map" class="w-full h-full"></div>
+
+            <!-- Overlay flotante con Controles Rápidos sobre el Mapa -->
+            <div class="absolute top-4 left-4 z-[1000] flex flex-col gap-2">
+                <div class="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 p-2.5 rounded-xl shadow-xl flex items-center gap-3">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="satellite" class="w-4 h-4 text-emerald-400" id="gpsIcon"></i>
+                        <span class="text-xs font-semibold text-slate-200" id="gpsStatus">GPS Esperando</span>
+                    </div>
+                    <span class="text-slate-600">|</span>
+                    <span class="text-xs text-slate-400" id="accuracyText">Precisión: - m</span>
+                </div>
+            </div>
+
+            <!-- Botón flotante para centrar mapa -->
+            <button onclick="centerMapOnTruck()" class="absolute bottom-4 right-4 z-[1000] bg-slate-800/90 hover:bg-slate-700 text-white p-3 rounded-full shadow-xl border border-slate-600/80 transition active:scale-95">
+                <i data-lucide="crosshair" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <!-- Panel Lateral / Inferior de Control e Indicadores -->
+        <div class="w-full lg:w-96 bg-slate-800 border-t lg:border-t-0 lg:border-l border-slate-700 flex flex-col h-[45vh] lg:h-auto z-10 shadow-2xl">
+            
+            <!-- Dashboard KPIs -->
+            <div class="p-4 grid grid-cols-2 gap-3 border-b border-slate-700/60 bg-slate-800/50">
+                <!-- KPI 1: Velocidad Actual -->
+                <div class="bg-slate-900/70 p-3 rounded-xl border border-slate-700/60 flex flex-col">
+                    <span class="text-xs font-medium text-slate-400 flex items-center gap-1.5">
+                        <i data-lucide="gauge" class="w-3.5 h-3.5 text-cyan-400"></i> Velocidad
+                    </span>
+                    <div class="mt-1 flex items-baseline gap-1">
+                        <span id="kpiSpeed" class="text-2xl font-black tracking-tight text-white">0.0</span>
+                        <span class="text-xs font-bold text-slate-500">km/h</span>
+                    </div>
+                    <span id="kpiAvgSpeed" class="text-[10px] text-slate-400 mt-1">Prom: 0.0 km/h</span>
+                </div>
+
+                <!-- KPI 2: Distancia -->
+                <div class="bg-slate-900/70 p-3 rounded-xl border border-slate-700/60 flex flex-col">
+                    <span class="text-xs font-medium text-slate-400 flex items-center gap-1.5">
+                        <i data-lucide="route" class="w-3.5 h-3.5 text-emerald-400"></i> Distancia
+                    </span>
+                    <div class="mt-1 flex items-baseline gap-1">
+                        <span id="kpiDistance" class="text-2xl font-black tracking-tight text-white">0.00</span>
+                        <span class="text-xs font-bold text-slate-500">km</span>
+                    </div>
+                    <span id="kpiPoints" class="text-[10px] text-slate-400 mt-1">Puntos GPS: 0</span>
+                </div>
+
+                <!-- KPI 3: Tiempo Transcurrido -->
+                <div class="bg-slate-900/70 p-3 rounded-xl border border-slate-700/60 flex flex-col">
+                    <span class="text-xs font-medium text-slate-400 flex items-center gap-1.5">
+                        <i data-lucide="timer" class="w-3.5 h-3.5 text-amber-400"></i> Tiempo Ruta
+                    </span>
+                    <div class="mt-1">
+                        <span id="kpiTime" class="text-2xl font-black tracking-tight text-white font-mono">00:00:00</span>
+                    </div>
+                    <span id="kpiIdleTime" class="text-[10px] text-slate-400 mt-1">Detenido: 00:00</span>
+                </div>
+
+                <!-- KPI 4: Paradas Registradas -->
+                <div class="bg-slate-900/70 p-3 rounded-xl border border-slate-700/60 flex flex-col">
+                    <span class="text-xs font-medium text-slate-400 flex items-center gap-1.5">
+                        <i data-lucide="map-pin" class="w-3.5 h-3.5 text-rose-400"></i> Paradas
+                    </span>
+                    <div class="mt-1 flex items-baseline gap-1">
+                        <span id="kpiStops" class="text-2xl font-black tracking-tight text-white">0</span>
+                        <span class="text-xs font-bold text-slate-500">totales</span>
+                    </div>
+                    <span id="kpiAutoStops" class="text-[10px] text-slate-400 mt-1">Auto: 0 | Manual: 0</span>
+                </div>
+            </div>
+
+            <!-- Botones Primarios de Acción / Control de Ruta -->
+            <div class="p-4 border-b border-slate-700/60 flex flex-col gap-2 bg-slate-800">
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="startBtn" onclick="startRoute()" class="bg-brand-600 hover:bg-brand-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-brand-600/20 flex items-center justify-center gap-2 transition active:scale-95">
+                        <i data-lucide="play" class="w-5 h-5 fill-current"></i> Iniciar Ruta
+                    </button>
+                    <button id="pauseBtn" onclick="pauseRoute()" disabled class="bg-slate-700 hover:bg-slate-600 text-slate-400 font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition opacity-50 cursor-not-allowed">
+                        <i data-lucide="pause" class="w-5 h-5"></i> Pausar
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="manualStopBtn" onclick="openStopModal()" disabled class="bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2.5 px-3 rounded-xl shadow flex items-center justify-center gap-1.5 text-xs transition opacity-50 cursor-not-allowed">
+                        <i data-lucide="plus-circle" class="w-4 h-4"></i> Registrar Parada
+                    </button>
+                    <button id="finishBtn" onclick="finishRoute()" disabled class="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2.5 px-3 rounded-xl shadow flex items-center justify-center gap-1.5 text-xs transition opacity-50 cursor-not-allowed">
+                        <i data-lucide="square" class="w-4 h-4 fill-current"></i> Finalizar Ruta
+                    </button>
+                </div>
+            </div>
+
+            <!-- Registro en Tiempo Real de Paradas (Log) -->
+            <div class="flex-1 flex flex-col min-h-0 bg-slate-900/40">
+                <div class="px-4 py-2.5 bg-slate-800/80 border-b border-slate-700/60 flex justify-between items-center">
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <i data-lucide="list" class="w-3.5 h-3.5 text-brand-400"></i> Registro de Paradas
+                    </span>
+                    <button onclick="exportData('csv')" class="text-[11px] text-brand-400 hover:text-brand-300 font-medium flex items-center gap-1">
+                        <i data-lucide="download" class="w-3 h-3"></i> Exportar CSV
+                    </button>
+                </div>
+
+                <div id="stopsList" class="flex-1 overflow-y-auto p-3 space-y-2 text-xs">
+                    <div id="emptyStopsState" class="h-full flex flex-col items-center justify-center text-slate-500 p-6 text-center">
+                        <i data-lucide="map-pin-off" class="w-8 h-8 mb-2 opacity-40"></i>
+                        <p class="text-xs">No hay paradas registradas aún.</p>
+                        <p class="text-[10px] text-slate-600 mt-0.5">Se registrarán automáticamente al detenerte o mediante el botón de parada manual.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Registro de Parada Manual -->
+    <div id="stopModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[2000] hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-md w-full p-5 shadow-2xl">
+            <div class="flex justify-between items-center border-b border-slate-700 pb-3 mb-4">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <i data-lucide="archive" class="w-5 h-5 text-amber-400"></i>
+                    Registrar Punto / Incidencia
+                </h3>
+                <button onclick="closeStopModal()" class="text-slate-400 hover:text-white p-1">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1.5">Tipo de Evento</label>
+                    <select id="stopTypeSelect" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-brand-500">
+                        <option value="Contenedor Lleno">🗑️ Contenedor Lleno</option>
+                        <option value="Punto Limpio / Recolección">♻️ Punto Limpio / Recolección</option>
+                        <option value="Obstrucción / Calle Bloqueada">🚧 Obstrucción en Vía</option>
+                        <option value="Basura Voluminosa">📦 Basura Voluminosa</option>
+                        <option value="Falla Mecánica">🔧 Falla Mecánica</option>
+                        <option value="Otro / Comentario">📝 Otro</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1.5">Nota / Observaciones (Opcional)</label>
+                    <textarea id="stopNoteInput" rows="3" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-brand-500 placeholder-slate-600" placeholder="Ej: Contenedor dañado o acceso restringido por autos estacionados..."></textarea>
+                </div>
+
+                <div class="flex gap-2 pt-2">
+                    <button onclick="closeStopModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold py-2.5 rounded-xl text-xs transition">
+                        Cancelar
+                    </button>
+                    <button onclick="saveManualStop()" class="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2.5 rounded-xl text-xs shadow-lg transition">
+                        Guardar Parada
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Resumen Final de Ruta -->
+    <div id="summaryModal" class="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-[2000] hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
+            <div class="text-center mb-5">
+                <div class="w-12 h-12 bg-brand-500/20 text-brand-400 border border-brand-500/30 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                    <i data-lucide="check-circle-2" class="w-7 h-7"></i>
+                </div>
+                <h2 class="text-xl font-bold text-white">¡Ruta Finalizada!</h2>
+                <p class="text-xs text-slate-400 mt-1">Resumen general de la jornada de recolección</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 mb-6">
+                <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700/50">
+                    <span class="text-[11px] text-slate-400 block">Distancia Recorrida</span>
+                    <span id="sumDistance" class="text-lg font-bold text-white">0 km</span>
+                </div>
+                <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700/50">
+                    <span class="text-[11px] text-slate-400 block">Tiempo Total</span>
+                    <span id="sumTime" class="text-lg font-bold text-white">00:00:00</span>
+                </div>
+                <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700/50">
+                    <span class="text-[11px] text-slate-400 block">Velocidad Promedio</span>
+                    <span id="sumAvgSpeed" class="text-lg font-bold text-white">0 km/h</span>
+                </div>
+                <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-700/50">
+                    <span class="text-[11px] text-slate-400 block">Paradas Realizadas</span>
+                    <span id="sumStops" class="text-lg font-bold text-white">0</span>
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <div class="grid grid-cols-2 gap-2">
+                    <button onclick="exportData('json')" class="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 border border-slate-600">
+                        <i data-lucide="file-json" class="w-4 h-4"></i> Exportar JSON
+                    </button>
+                    <button onclick="exportData('csv')" class="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 border border-slate-600">
+                        <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Exportar CSV
+                    </button>
+                </div>
+                <button onclick="closeSummaryModal()" class="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-3 rounded-xl text-xs mt-1 shadow-lg">
+                    Aceptar y Restablecer
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        // Inicialización Lucide Icons
+        lucide.createIcons();
+
+        // VARIABLES DE ESTADO Y CONFIGURACIÓN
+        let map;
+        let routePolyline;
+        let truckMarker;
+        let stopMarkers = [];
+
+        // Estado de la ruta
+        let isTracking = false;
+        let isPaused = false;
+        let routePoints = []; // Array de {lat, lng, speed, timestamp}
+        let stops = [];       // Array de {id, lat, lng, type, time, duration, isAuto, note}
+
+        // Métricas en vivo
+        let totalDistance = 0; // km
+        let startTime = null;
+        let elapsedTime = 0;   // segundos
+        let timerInterval = null;
+        let currentSpeed = 0;  // km/h
+        let speedHistory = [];
+
+        // Lógica de Detección Automática de Paradas
+        const AUTO_STOP_SPEED_THRESHOLD = 2.0; // km/h por debajo del cual se considera detenido
+        const AUTO_STOP_TIME_THRESHOLD = 5;    // segundos seguidos parado para activar detección
+        let lowSpeedTimer = null;
+        let isCurrentlyStoppedAuto = false;
+        let currentAutoStopStartTime = null;
+
+        // Modo Simulación / Demo
+        let isDemoMode = false;
+        let demoInterval = null;
+        let demoStep = 0;
+        const demoRouteCoords = [
+            { lat: 40.416775, lng: -3.703790, speed: 18 },
+            { lat: 40.417200, lng: -3.703200, speed: 22 },
+            { lat: 40.417800, lng: -3.702500, speed: 15 },
+            { lat: 40.418200, lng: -3.701800, speed: 0.5 }, // Parada auto 1
+            { lat: 40.418210, lng: -3.701810, speed: 0.0 }, 
+            { lat: 40.418205, lng: -3.701805, speed: 0.2 }, 
+            { lat: 40.418900, lng: -3.701000, speed: 25 },
+            { lat: 40.419500, lng: -3.700100, speed: 30 },
+            { lat: 40.420200, lng: -3.699000, speed: 12 },
+            { lat: 40.420800, lng: -3.698200, speed: 0.0 }, // Parada auto 2
+            { lat: 40.420810, lng: -3.698210, speed: 0.0 },
+            { lat: 40.421500, lng: -3.697500, speed: 20 },
+            { lat: 40.422200, lng: -3.696800, speed: 16 }
+        ];
+
+        // Geolocation Watch ID
+        let watchPositionId = null;
+
+        // INICIALIZACIÓN DE LA APLICACIÓN
+        window.onload = function() {
+            initMap();
+            setupGeolocation();
+        };
+
+        // 1. Inicialización del Mapa Leaflet
+        function initMap() {
+            // Coordenada inicial por defecto (Madrid centro)
+            const initialCoords = [40.416775, -3.703790];
+            
+            map = L.map('map', {
+                zoomControl: false
+            }).setView(initialCoords, 15);
+
+            // Capa de mapa (CartoDB Dark Matter para estética profesional oscura)
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap &copy; CARTO',
+                maxZoom: 19
+            }).addTo(map);
+
+            // Control de Zoom reubicado a la derecha
+            L.control.zoom({ position: 'topright' }).addTo(map);
+
+            // Polyline para la ruta del camión
+            routePolyline = L.polyline([], {
+                color: '#16a34a',
+                weight: 5,
+                opacity: 0.85,
+                lineJoin: 'round'
+            }).addTo(map);
+
+            // Icono Custom SVG de Camión de Basura
+            const truckIcon = L.divIcon({
+                className: 'custom-truck-icon',
+                html: `
+                    <div class="relative flex items-center justify-center w-10 h-10 bg-slate-900 border-2 border-brand-500 rounded-full shadow-2xl text-brand-400">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+                        <span class="absolute -top-1 -right-1 flex h-3 w-3">
+                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"></span>
+                          <span class="relative inline-flex rounded-full h-3 w-3 bg-brand-500"></span>
+                        </span>
+                    </div>
+                `,
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
+            });
+
+            truckMarker = L.marker(initialCoords, { icon: truckIcon }).addTo(map);
+        }
+
+        // 2. Configuración de Geolocalización HTML5
+        function setupGeolocation() {
+            const statusEl = document.getElementById('gpsStatus');
+            const accuracyEl = document.getElementById('accuracyText');
+            const iconEl = document.getElementById('gpsIcon');
+
+            if (!('geolocation' in navigator)) {
+                statusEl.textContent = "GPS No Disponible";
+                statusEl.classList.add('text-rose-400');
+                return;
+            }
+
+            watchPositionId = navigator.geolocation.watchPosition(
+                (position) => {
+                    if (isDemoMode) return; // Si estamos en modo simulación, ignorar GPS real
+
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const accuracy = Math.round(position.coords.accuracy);
+                    
+                    // Convertir velocidad m/s a km/h
+                    let speed = position.coords.speed ? (position.coords.speed * 3.6) : 0;
+                    if (speed < 0) speed = 0;
+
+                    statusEl.textContent = "GPS Conectado";
+                    accuracyEl.textContent = `Precisión: ${accuracy}m`;
+                    iconEl.className = "w-4 h-4 text-emerald-400";
+
+                    // Procesar nueva posición
+                    handleNewLocation(lat, lng, speed);
+                },
+                (error) => {
+                    if (isDemoMode) return;
+                    console.warn("Error GPS:", error.message);
+                    statusEl.textContent = "Sin señal GPS";
+                    iconEl.className = "w-4 h-4 text-amber-400";
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 1000
+                }
+            );
+        }
+
+        // 3. Procesar Nueva Posición GPS o Simulada
+        function handleNewLocation(lat, lng, speed) {
+            const newLatLng = [lat, lng];
+
+            // Centrar suavemente si es el primer punto
+            if (routePoints.length === 0) {
+                map.setView(newLatLng, 16);
+            }
+
+            // Actualizar Marcador
+            truckMarker.setLatLng(newLatLng);
+
+            if (!isTracking || isPaused) return;
+
+            // Calcular distancia recorrida desde el último punto
+            if (routePoints.length > 0) {
+                const prevPoint = routePoints[routePoints.length - 1];
+                const distDelta = calculateHaversineDistance(prevPoint.lat, prevPoint.lng, lat, lng);
+                
+                // Evitar picos por imprecisión GPS (saltos irreales > 500m)
+                if (distDelta < 0.5) {
+                    totalDistance += distDelta;
+                }
+            }
+
+            // Registrar punto
+            routePoints.push({ lat, lng, speed, timestamp: new Date() });
+            routePolyline.addLatLng(newLatLng);
+            speedHistory.push(speed);
+            currentSpeed = speed;
+
+            // Lógica de Detección Automática de Parada
+            checkAutomaticStop(speed, lat, lng);
+
+            // Actualizar Interfaz
+            updateDashboardKPIs();
+        }
+
+        // 4. Lógica de Paradas Automáticas
+        function checkAutomaticStop(speed, lat, lng) {
+            if (speed < AUTO_STOP_SPEED_THRESHOLD) {
+                if (!isCurrentlyStoppedAuto) {
+                    if (!lowSpeedTimer) {
+                        lowSpeedTimer = setTimeout(() => {
+                            // Se confirma la parada tras X segundos a baja velocidad
+                            isCurrentlyStoppedAuto = true;
+                            currentAutoStopStartTime = new Date();
+                            
+                            // Registrar Parada Automática
+                            registerStop(lat, lng, "Parada de Recolección", true);
+                        }, AUTO_STOP_TIME_THRESHOLD * 1000);
+                    }
+                }
+            } else {
+                // Se reanuda la marcha
+                if (lowSpeedTimer) {
+                    clearTimeout(lowSpeedTimer);
+                    lowSpeedTimer = null;
+                }
+                
+                if (isCurrentlyStoppedAuto) {
+                    isCurrentlyStoppedAuto = false;
+                    // Actualizar duración de la última parada
+                    if (stops.length > 0) {
+                        const lastStop = stops[stops.length - 1];
+                        if (lastStop.isAuto) {
+                            const durationSec = Math.round((new Date() - currentAutoStopStartTime) / 1000);
+                            lastStop.duration = `${durationSec}s`;
+                            renderStopsList();
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Registrar Parada (Manual o Automática)
+        function registerStop(lat, lng, type, isAuto = false, note = "") {
+            const stopId = stops.length + 1;
+            const stopTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+            const stopData = {
+                id: stopId,
+                lat: lat,
+                lng: lng,
+                type: type,
+                time: stopTime,
+                duration: isAuto ? 'En curso...' : 'Manual',
+                isAuto: isAuto,
+                note: note
+            };
+
+            stops.push(stopData);
+
+            // Crear icono de marcador de parada en el mapa
+            const stopColor = isAuto ? '#f59e0b' : '#3b82f6';
+            const stopIcon = L.divIcon({
+                className: 'custom-stop-icon',
+                html: `
+                    <div class="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-lg border-2 border-white" style="background-color: ${stopColor}">
+                        ${stopId}
+                    </div>
+                `,
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
+            });
+
+            const marker = L.marker([lat, lng], { icon: stopIcon }).addTo(map);
+            marker.bindPopup(`
+                <div class="text-slate-800 p-1">
+                    <strong class="text-sm font-bold block">${isAuto ? '🛑 Parada Automática' : '📍 Punto Registrado'} #${stopId}</strong>
+                    <span class="text-xs text-slate-600 font-medium block mt-0.5">${type}</span>
+                    <span class="text-[11px] text-slate-500 block">Hora: ${stopTime}</span>
+                    ${note ? `<p class="text-xs bg-slate-100 p-1.5 rounded mt-1.5 border border-slate-200">${note}</p>` : ''}
+                </div>
+            `);
+
+            stopMarkers.push(marker);
+
+            // Actualizar lista e indicadores
+            renderStopsList();
+            updateDashboardKPIs();
+        }
+
+        // 6. Controles de Sesión / Ruta
+        function startRoute() {
+            if (isTracking && !isPaused) return;
+
+            isTracking = true;
+            isPaused = false;
+            if (!startTime) startTime = new Date();
+
+            // Interfaz
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('startBtn').classList.add('opacity-50', 'cursor-not-allowed');
+            
+            document.getElementById('pauseBtn').disabled = false;
+            document.getElementById('pauseBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+            
+            document.getElementById('manualStopBtn').disabled = false;
+            document.getElementById('manualStopBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+
+            document.getElementById('finishBtn').disabled = false;
+            document.getElementById('finishBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+
+            // Badge Estado
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            statusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse-red";
+            statusText.textContent = "Ruta en Curso";
+            statusText.className = "text-emerald-400 font-semibold";
+
+            // Timer Contador de Tiempo
+            if (!timerInterval) {
+                timerInterval = setInterval(() => {
+                    elapsedTime++;
+                    document.getElementById('kpiTime').textContent = formatSeconds(elapsedTime);
+                }, 1000);
+            }
+        }
+
+        function pauseRoute() {
+            if (!isTracking) return;
+
+            isPaused = !isPaused;
+            const pauseBtn = document.getElementById('pauseBtn');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+
+            if (isPaused) {
+                pauseBtn.innerHTML = `<i data-lucide="play" class="w-5 h-5 fill-current"></i> Reanudar`;
+                statusDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500";
+                statusText.textContent = "Ruta Pausada";
+                statusText.className = "text-amber-400 font-semibold";
+            } else {
+                pauseBtn.innerHTML = `<i data-lucide="pause" class="w-5 h-5"></i> Pausar`;
+                statusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse-red";
+                statusText.textContent = "Ruta en Curso";
+                statusText.className = "text-emerald-400 font-semibold";
+            }
+            lucide.createIcons();
+        }
+
+        function finishRoute() {
+            if (!isTracking) return;
+
+            isTracking = false;
+            clearInterval(timerInterval);
+            timerInterval = null;
+
+            if (isDemoMode) {
+                clearInterval(demoInterval);
+            }
+
+            // Calcular Estadísticas Finales
+            const avgSpeed = speedHistory.length > 0 ? (speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length).toFixed(1) : 0;
+
+            document.getElementById('sumDistance').textContent = `${totalDistance.toFixed(2)} km`;
+            document.getElementById('sumTime').textContent = formatSeconds(elapsedTime);
+            document.getElementById('sumAvgSpeed').textContent = `${avgSpeed} km/h`;
+            document.getElementById('sumStops').textContent = stops.length;
+
+            // Abrir Modal de Resumen
+            document.getElementById('summaryModal').classList.remove('hidden');
+        }
+
+        // 7. Actualización de Interfaz y KPIs
+        function updateDashboardKPIs() {
+            document.getElementById('kpiSpeed').textContent = currentSpeed.toFixed(1);
+            document.getElementById('kpiDistance').textContent = totalDistance.toFixed(2);
+            document.getElementById('kpiPoints').textContent = `Puntos GPS: ${routePoints.length}`;
+
+            // Calcular Velocidad Promedio
+            if (speedHistory.length > 0) {
+                const avgSpeed = (speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length).toFixed(1);
+                document.getElementById('kpiAvgSpeed').textContent = `Prom: ${avgSpeed} km/h`;
+            }
+
+            // Contador de Paradas
+            document.getElementById('kpiStops').textContent = stops.length;
+            const autoCount = stops.filter(s => s.isAuto).length;
+            const manualCount = stops.length - autoCount;
+            document.getElementById('kpiAutoStops').textContent = `Auto: ${autoCount} | Manual: ${manualCount}`;
+        }
+
+        function renderStopsList() {
+            const listEl = document.getElementById('stopsList');
+            
+            if (stops.length === 0) {
+                listEl.innerHTML = `
+                    <div id="emptyStopsState" class="h-full flex flex-col items-center justify-center text-slate-500 p-6 text-center">
+                        <i data-lucide="map-pin-off" class="w-8 h-8 mb-2 opacity-40"></i>
+                        <p class="text-xs">No hay paradas registradas aún.</p>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            listEl.innerHTML = stops.slice().reverse().map(stop => `
+                <div class="bg-slate-800/90 border border-slate-700/70 rounded-xl p-2.5 flex items-start gap-2.5 shadow-sm hover:border-slate-600 transition">
+                    <div class="w-6 h-6 rounded-lg ${stop.isAuto ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'} flex items-center justify-center shrink-0 font-bold text-xs mt-0.5">
+                        ${stop.id}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex justify-between items-baseline">
+                            <h4 class="font-bold text-slate-200 truncate text-xs">${stop.type}</h4>
+                            <span class="text-[10px] text-slate-400 font-mono">${stop.time}</span>
+                        </div>
+                        <div class="flex justify-between items-center mt-1 text-[11px] text-slate-400">
+                            <span>Duración: <strong class="text-slate-300 font-normal">${stop.duration}</strong></span>
+                            <span class="text-[10px] bg-slate-700/50 px-1.5 py-0.5 rounded text-slate-400">${stop.isAuto ? 'Auto' : 'Manual'}</span>
+                        </div>
+                        ${stop.note ? `<p class="text-[11px] text-slate-300 bg-slate-900/60 p-1.5 rounded-lg mt-1.5 border border-slate-800">${stop.note}</p>` : ''}
+                    </div>
+                </div>
+            `).join('');
+
+            lucide.createIcons();
+        }
+
+        // 8. Modales y Registro Manual
+        function openStopModal() {
+            if (!isTracking) return;
+            document.getElementById('stopModal').classList.remove('hidden');
+        }
+
+        function closeStopModal() {
+            document.getElementById('stopModal').classList.add('hidden');
+            document.getElementById('stopNoteInput').value = '';
+        }
+
+        function saveManualStop() {
+            const type = document.getElementById('stopTypeSelect').value;
+            const note = document.getElementById('stopNoteInput').value.trim();
+
+            const currentPos = truckMarker.getLatLng();
+            registerStop(currentPos.lat, currentPos.lng, type, false, note);
+
+            closeStopModal();
+        }
+
+        function closeSummaryModal() {
+            document.getElementById('summaryModal').classList.add('hidden');
+            resetApplicationState();
+        }
+
+        // 9. Modo Simulación / Demo
+        function toggleDemoMode() {
+            isDemoMode = !isDemoMode;
+            const btn = document.getElementById('toggleDemoBtn');
+            const statusEl = document.getElementById('gpsStatus');
+
+            if (isDemoMode) {
+                btn.className = "bg-amber-500 text-slate-950 border border-amber-400 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shadow-md";
+                statusEl.textContent = "Modo Simulación Activo";
+                startDemoSimulation();
+            } else {
+                btn.className = "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition font-medium";
+                statusEl.textContent = "GPS Esperando";
+                if (demoInterval) clearInterval(demoInterval);
+                setupGeolocation();
+            }
+        }
+
+        function startDemoSimulation() {
+            if (demoInterval) clearInterval(demoInterval);
+            demoStep = 0;
+
+            // Iniciar ruta automáticamente en modo simulación
+            if (!isTracking) startRoute();
+
+            demoInterval = setInterval(() => {
+                if (!isTracking || isPaused) return;
+
+                const coord = demoRouteCoords[demoStep % demoRouteCoords.length];
+                handleNewLocation(coord.lat, coord.lng, coord.speed);
+
+                demoStep++;
+            }, 2500);
+        }
+
+        // 10. Utilitarios y Exportación
+        function centerMapOnTruck() {
+            if (truckMarker) {
+                map.flyTo(truckMarker.getLatLng(), 16);
+            }
+        }
+
+        function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Radio de la Tierra en km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        function formatSeconds(sec) {
+            const hrs = Math.floor(sec / 3600);
+            const mins = Math.floor((sec % 3600) / 60);
+            const secs = sec % 60;
+            return [hrs, mins, secs].map(v => v < 10 ? "0" + v : v).join(":");
+        }
+
+        function resetApplicationState() {
+            isTracking = false;
+            isPaused = false;
+            totalDistance = 0;
+            elapsedTime = 0;
+            routePoints = [];
+            stops = [];
+            speedHistory = [];
+
+            routePolyline.setLatLngs([]);
+            stopMarkers.forEach(m => map.removeLayer(m));
+            stopMarkers = [];
+
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('startBtn').classList.remove('opacity-50', 'cursor-not-allowed');
+            
+            document.getElementById('pauseBtn').disabled = true;
+            document.getElementById('pauseBtn').classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('pauseBtn').innerHTML = `<i data-lucide="pause" class="w-5 h-5"></i> Pausar`;
+
+            document.getElementById('manualStopBtn').disabled = true;
+            document.getElementById('manualStopBtn').classList.add('opacity-50', 'cursor-not-allowed');
+
+            document.getElementById('finishBtn').disabled = true;
+            document.getElementById('finishBtn').classList.add('opacity-50', 'cursor-not-allowed');
+
+            document.getElementById('statusDot').className = "w-2.5 h-2.5 rounded-full bg-slate-500";
+            document.getElementById('statusText').textContent = "Listo";
+            document.getElementById('statusText').className = "text-slate-300";
+
+            updateDashboardKPIs();
+            renderStopsList();
+            lucide.createIcons();
+        }
+
+        function exportData(format) {
+            const exportObject = {
+                fecha: new Date().toISOString(),
+                distanciaTotalKm: totalDistance.toFixed(2),
+                tiempoTotal: formatSeconds(elapsedTime),
+                velocidadPromedioKmH: speedHistory.length > 0 ? (speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length).toFixed(1) : 0,
+                paradas: stops,
+                puntosRuta: routePoints
+            };
+
+            let dataStr = "";
+            let filename = `ruta_camion_${new Date().toISOString().slice(0,10)}`;
+
+            if (format === 'json') {
+                dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObject, null, 2));
+                filename += ".json";
+            } else if (format === 'csv') {
+                let csvContent = "Tipo,Hora,Duracion,Latitud,Longitud,Nota\n";
+                stops.forEach(s => {
+                    csvContent += `"${s.type}","${s.time}","${s.duration}",${s.lat},${s.lng},"${s.note || ''}"\n`;
+                });
+                dataStr = "data:text/csv;charset=utf-8," + encodeURIComponent(csvContent);
+                filename += ".csv";
+            }
+
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", filename);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
+    </script>
+</body>
+</html>
