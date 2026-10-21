@@ -379,9 +379,9 @@
             }).setView(initialCoords, 15);
 
             // Capa de mapa (CartoDB Dark Matter para estética profesional oscura)
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap &copy; CARTO',
-                maxZoom: 19
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '© OpenStreetMap contributors'
             }).addTo(map);
 
             // Control de Zoom reubicado a la derecha
